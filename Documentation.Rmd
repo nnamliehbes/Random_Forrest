@@ -46,7 +46,7 @@ forrest %>%
   sample_n(4) %>%
   select(isforrest, text)
 ```
-We have a lot of features! But let's try to take the sentence length into account and calculate the speak rate (words per seconds).
+We have a lot of features! But let's try to take the sentence length into account and calculate the speechrate (words per seconds).
 ```{r}
 forrest <- forrest %>%
   mutate(sentiment = sent_sum / word_count,
