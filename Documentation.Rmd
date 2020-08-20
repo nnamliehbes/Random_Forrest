@@ -23,11 +23,14 @@ library(formatR)
 library(themis)
 ```
 
+In this script, we will use linguistic features to predict the speaker (Forrest Gump vs anyone else) of spoken lines in the movie "Forrest Gump" by Robert Zemeckis.\
+\
+
 # Explore data
 
-In this script, we will use linguistic features to predict the speaker (Forrest Gump vs anyone else) of spoken lines in the movie "Forrest Gump" by Robert Zemeckis.
+Starting with exploratory data analysis is always important before modeling.
+Let's start by exploring the data set and some sentences spoken by Forrest or someone else.
 
-Let's start by exploring some sentences.
 
 ```{r, include = FALSE}
 setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
@@ -43,7 +46,7 @@ forrest %>%
   sample_n(4) %>%
   select(isforrest, text)
 ```
-We have a lot of features! But let's also try to take the sentence length into account and recalculate / add some features.
+We have a lot of features! But let's try to take the sentence length into account and calculate the speak rate (words per seconds).
 ```{r}
 forrest <- forrest %>%
   mutate(sentiment = sent_sum / word_count,
@@ -52,22 +55,19 @@ forrest <- forrest %>%
          closed_words = closed / word_count,
          speech_rate = word_count / duration)
 ```
-Starting with exploratory data analysis is always important before modeling. Let’s therefore make one nice plot to explore the relationships in this data. Are there any text features that distinguish Forrest Gump from other speakers?
-```{r fig.width = 12, fig.height = 12, echo = FALSE, message = FALSE, warning = FALSE}
-forrest %>%
-  filter(duration < max(forrest[forrest$duration > 10,c("duration","isforrest","text")] %>% filter(isforrest == "FORREST") %>% select(duration))) %>%
-  mutate(sent_mean = sent_sum / word_count,
-         comp_mean = comp_score / word_count,
-         open_mean = open / word_count,
-         closed_mean = closed / word_count,
-         speech_rate_mean = word_count / duration) %>%
+Now its time to make a nice plot to explore the relationships in this data. Are there any text features that distinguish Forrest from other speakers?
+```{r fig.width = 12, fig.height = 12, echo = TRUE, message = FALSE, warning = FALSE}
+forrest %>% # we will discard "sentences" which are shown as OST in the data set 
+  filter(duration < max(forrest[forrest$duration > 10,c("duration","isforrest","text")] %>%
+                          filter(isforrest == "FORREST") %>%
+                          select(duration))) %>%
   group_by(isforrest) %>%
   filter(!is.na(isforrest)) %>%
-  summarise(sentiment = mean(sent_mean),
-            `syntactic nodes` = mean(comp_mean, na.rm = T),
+  summarise(sentiment = mean(sentiment, na.rm = T),
+            `syntactic nodes` = mean(nodes, na.rm = T),
             `syntactic depth` = mean(depth, na.rm = T),
-            `open words` = mean(open_mean),
-            `closed words` = mean(closed_mean),
+            `open words` = mean(open_words),
+            `closed words` = mean(closed_words),
             seconds = mean(duration, na.rm = T),
             `lexical frequency` = mean(lexfreq_norm_log_mean, na.rm = T),
             words = mean(word_count),
@@ -79,14 +79,13 @@ forrest %>%
             `unique words` = mean(n_uq_words, na.rm = T),
             `unique characters` = mean(n_uq_chars, na.rm = T),
             `characters per word` = mean(n_charsperword, na.rm = T),
-            `speech rate` = mean(speech_rate_mean, na.rm = T)) %>%
+            `speech rate` = mean(speech_rate, na.rm = T)) %>%
   reshape2::melt() %>%
   ggplot(aes(x = isforrest, y = value, color = isforrest, fill = isforrest)) +
   geom_col(show.legend = FALSE) +
   facet_wrap(~variable, scales = "free", ncol = 4) +
   labs(title = "Overview of predictors",
-       subtitle = "Mean text predictors per sentence",
-       caption = "Data: Master Thesis") +
+       subtitle = "Mean text predictors per sentence") +
   ylab("") +
   labs(x = NULL) +
   scale_fill_npg(alpha = 0.7) +
@@ -96,14 +95,14 @@ forrest %>%
         panel.grid.major = element_blank(),
         panel.grid.minor = element_blank())
 ```
-We can see differences in lexical features and character-features especially. We will now create a seperate data set with those variables.
+We can see differences in lexical features and character-features especially. We will now create a seperate data set with the variables shown in the plot above.
 
-```{r pressure, echo = FALSE}
+```{r pressure, echo = TRUE}
 # preprocess the data set
 forrest_clean <- forrest %>%
                  # any sentence above ~13 is not a real sentence, therefore we will discard those  
                  filter(duration < max(forrest[forrest$duration > 10, c("duration","isforrest","text")] %>%
-                 # there are two sentences where the speaker is not defined
+                 # remove two sentences where the speaker is not defined
                  filter(isforrest == "FORREST") %>%
                  select(duration)))
 ```
@@ -116,8 +115,8 @@ forrest_clean <- forrest_clean %>%
 ```
 # Build a random forest model
 ## Split data into training and test data set
-We will start by splitting our data into a training and testing set.
-Then we will create cross-validation resamples of the training data to evaluate our models.
+Our first step is to split our data into a training and testing data set.
+We will then create cross-validation resamples of the training data to evaluate our random forest models.
 ```{r}
 set.seed(123)
 forrest_split <- initial_split(forrest_clean, strata = isforrest)
@@ -127,7 +126,7 @@ forrest_test <- testing(forrest_split)
 set.seed(123)
 forrest_folds <- vfold_cv(forrest_train, strata = isforrest)
 ```
-## Define a tidmodel recipe and workflow.
+## Define a tidymodel recipe and workflow.
 We now want to tune some hyperparameters. Because we use a random forest model, we don’t need to do much preprocessing. That means, that we don’t need to worry about centering or scaling our data. 
 ```{r}
 forrest_recipe <- 
@@ -168,7 +167,7 @@ tune_res <- tune_grid(
   grid = 20
 )
 ```
-Let's try a visualization to understand our results.
+Let's now try a visualization to understand our results.
 
 ```{r echo = FALSE, warning = FALSE, message = FALSE}
 load("Data/tune_res.Rdata")
@@ -186,8 +185,7 @@ tune_res %>%
   facet_wrap(~parameter, scales = "free_x") +
   labs(x = NULL, y = "ROC-AUC") +
   labs(title = "Overview of hyperparameters",
-       subtitle = "It looks like lower values of mtry (number of predictors sampled for splitting at each node) \nand higher values of trees perform well.",
-       caption = "Data: Master Thesis") +
+       subtitle = "It looks like lower values of mtry (number of predictors sampled for \nsplitting at each node and higher values of trees perform well.") +
   labs(x = NULL) +
   theme_minimal() +
   scale_fill_npg(alpha = 0.7) +
@@ -227,8 +225,7 @@ rf_tune_results %>%
   geom_point() +
   geom_line() +
   labs(title = "Random Forest",
-       subtitle = "ROC-AUC Scores of random forest models with varying number of trees, split-nodes and terminal nodes",
-       caption = "Data: Master Thesis") +
+       subtitle = "ROC-AUC Scores of random forest models with varying number of \ntrees, split-nodes and terminal nodes") +
   theme_minimal() +
   ylab("ROC-AUC") +
   theme_ft_rc() +
@@ -253,12 +250,13 @@ rf_fit <- rf_workflow %>% last_fit(forrest_split)
 test_performance <- rf_fit %>% collect_metrics()
 # generate predictions from the test set
 test_predictions <- rf_fit %>% collect_predictions()
+```
+One way to visualize the perfomance of a classification model is to use a confusion matrix. The confusion matrix shows the predictions the model got correct (top left and bottom right corners) and the predictions missed by the model (lower left and upper right corners). We can also create a ROC curve for the testing set.
+
+```{r fig.width = 6, fig.height = 6}
 # create confusion matrix
 confusion_matrix <- test_predictions %>% conf_mat(truth = isforrest, estimate = .pred_class)
 confusion_matrix <- as.data.frame(confusion_matrix["table"])
-```
-One way to visualize the perfomance of a classification model is to use a confusion matrix.
-```{r fig.width = 6, fig.height = 6}
 
 plotTable <- confusion_matrix %>%
   mutate(goodbad = ifelse(confusion_matrix$table.Prediction == confusion_matrix$table.Truth, "good", "bad")) %>%
@@ -272,8 +270,7 @@ ggplot(data = plotTable, mapping = aes(x = table.Truth, y = table.Prediction, fi
   ylim(rev(levels(confusion_matrix$table.Prediction))) +
   theme_ft_rc() +
   labs(title = "Confusion matrix",
-       subtitle = "How well can we predict the speakers of spoken lines?",
-       caption = "Data: Master Thesis") +
+       subtitle = "How well can we predict the speakers of spoken lines?") +
   theme(panel.border = element_blank(),
         panel.grid.major = element_blank(),
         panel.grid.minor = element_blank()) +
@@ -287,8 +284,7 @@ test_predictions %>%
   geom_abline(lty = 2, color = "gray80", size = 1.2) +
   geom_path(show.legend = FALSE, alpha = 0.6, size = 1.2) +
     labs(title = "ROC curve",
-         subtitle = "Performance of the selected random forest model",
-         caption = "Data: Master Thesis") +
+         subtitle = "Performance of the selected random forest model") +
     theme_minimal() +
     theme_ft_rc() +
     theme(panel.border = element_blank(),
@@ -298,10 +294,8 @@ test_predictions %>%
     scale_color_npg()
 ```
 
-Our results here indicate that we did not overfit during the tuning process.
-We can also create a ROC curve for the testing set.
+Our results indicate that we did not overfit during the tuning process. The performance of our model is moderate. Which features were the best to distinguish speakers of spoken lines?
 
-# Extract important features
 ```{r message = FALSE}
 library(vip)
 imp_df <- rf_workflow %>%
@@ -342,8 +336,7 @@ imp_df %>%
   xlab("") +
   coord_flip() +
   labs(title = "Importance of predictors",
-       subtitle = "These are the predictors that are most important globally for \nwhether a line was spoken by Forrest or not.",
-       caption = "Data: Master Thesis") +
+       subtitle = "These are the predictors that are most important globally for \nwhether a line was spoken by Forrest or not.") +
   theme_ft_rc() +
   theme(panel.border = element_blank(),
         panel.grid.major = element_blank(),
@@ -352,3 +345,6 @@ imp_df %>%
   scale_color_gradient(low="#e64b35", high="#4dbbd5", guide = guide_legend(reverse = TRUE))
 ```
 
+# Conclusion
+
+Overall our model did a fairly good job. As mentioned in the beginning of our exploratory analyses, lexical features seems to be most predictive. Our model may be further improved by taking the content of spoken words or topics of sentences into account. 
